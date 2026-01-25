@@ -10,4 +10,9 @@
   <ItemGroup>
     <PackageReference Include="MudBlazor" Version="8.*" />
   </ItemGroup>
+
+
+  <ItemGroup>
+    <ProjectReference Include="..\co-author.ServiceDefaults\co-author.ServiceDefaults.csproj" />
+  </ItemGroup>
 </Project>
