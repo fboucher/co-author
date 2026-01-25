@@ -6,6 +6,9 @@ var builder = WebApplication.CreateBuilder(args);
 // Add MudBlazor services
 builder.Services.AddMudServices();
 
+// Add HttpClient
+builder.Services.AddScoped(sp => new HttpClient { BaseAddress = new Uri(builder.Configuration["Api:BaseUrl"] ?? "https://api.reka.ai") });
+
 // Add services to the container.
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();

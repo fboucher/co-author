@@ -1,0 +1,207 @@
+@page "/chat"
+@rendermode InteractiveServer
+@using System.Net.Http.Json
+@using webapp.Models
+@inject HttpClient Http
+@inject IConfiguration Config
+
+<PageTitle>AI Chat</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Large" Class="mt-4">
+    
+    @* Error notification *@
+    @if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <MudAlert Severity="Severity.Error" Variant="Variant.Filled" Class="mb-4" CloseIconClicked="@(() => errorMessage = null)" ShowCloseIcon="true">
+            @errorMessage
+        </MudAlert>
+    }
+    
+    @* Chat history container *@
+    <MudPaper Class="pa-4 mb-4" Style="height: 500px; overflow-y: auto;" id="chatContainer">
+        @foreach (var message in chatHistory)
+        {
+            var bubbleClass = message.Role == "user" ? "user-bubble" : "ai-bubble";
+            var containerClass = message.Role == "user" ? "d-flex justify-end mb-3" : "d-flex justify-start mb-3";
+            
+            <div class="@containerClass">
+                <MudPaper Elevation="2" Class="@($"pa-3 {bubbleClass}")">
+                    <MudText Typo="Typo.body1">@message.Content</MudText>
+                    <MudText Typo="Typo.caption" Class="mt-1" Style="opacity: 0.7;">
+                        @message.Timestamp.ToString("HH:mm")
+                    </MudText>
+                </MudPaper>
+            </div>
+        }
+        
+        @if (isLoading)
+        {
+            <div class="d-flex justify-start mb-3">
+                <MudPaper Elevation="2" Class="pa-3 ai-bubble">
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+                </MudPaper>
+            </div>
+        }
+    </MudPaper>
+    
+    @* Input area *@
+    <div class="d-flex gap-2">
+        <MudTextField @bind-Value="currentMessage" 
+                      Label="Type your message" 
+                      Variant="Variant.Outlined"
+                      FullWidth="true"
+                      Disabled="@isLoading"
+                      Lines="2" />
+        <MudButton Variant="Variant.Filled" 
+                   Color="Color.Primary" 
+                   OnClick="SendMessage"
+                   Disabled="@(isLoading || string.IsNullOrWhiteSpace(currentMessage))"
+                   Style="height: fit-content;">
+            <MudIcon Icon="@Icons.Material.Filled.Send" />
+        </MudButton>
+    </div>
+    
+</MudContainer>
+
+<style>
+    .user-bubble {
+        max-width: 70%;
+        background-color: var(--mud-palette-primary);
+        color: white;
+    }
+    .ai-bubble {
+        max-width: 70%;
+        background-color: var(--mud-palette-surface);
+    }
+</style>
+
+@code {
+    private List<ChatMessage> chatHistory = new();
+    private string currentMessage = "";
+    private string? errorMessage;
+    private bool isLoading = false;
+    
+    protected override void OnInitialized()
+    {
+        try
+        {
+            // Verify that IConfiguration is available
+            if (Config == null)
+            {
+                errorMessage = "Configuration service is not available.";
+            }
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Initialization error: {ex.Message}";
+        }
+    }
+    
+    private async Task SendMessage()
+    {
+        if (string.IsNullOrWhiteSpace(currentMessage)) return;
+        
+        // Add user message
+        chatHistory.Add(new ChatMessage 
+        { 
+            Role = "user", 
+            Content = currentMessage.Trim(),
+            Timestamp = DateTime.Now
+        });
+        
+        var userMsg = currentMessage.Trim();
+        currentMessage = "";
+        isLoading = true;
+        
+        try
+        {
+            // Call Reka API
+            var response = await SendToRekaApi(userMsg);
+            
+            // Add AI response
+            chatHistory.Add(new ChatMessage 
+            { 
+                Role = "assistant", 
+                Content = response,
+                Timestamp = DateTime.Now
+            });
+            
+            errorMessage = null;
+        }
+        catch (HttpRequestException ex)
+        {
+            errorMessage = $"Network error: {ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error: {ex.Message}";
+        }
+        finally
+        {
+            isLoading = false;
+        }
+        
+        StateHasChanged();
+    }
+    
+    private async Task<string> SendToRekaApi(string userMessage)
+    {
+        try
+        {
+            var apiKey = Config?["REKA_API_KEY"];
+            
+            if (string.IsNullOrEmpty(apiKey))
+            {
+                throw new InvalidOperationException("REKA_API_KEY is not configured. Please set it in your environment variables or configuration.");
+            }
+            
+            var payload = new
+            {
+                messages = new[] { new { role = "user", content = userMessage } },
+                model = "reka-core",
+                stream = false
+            };
+            
+            var request = new HttpRequestMessage(HttpMethod.Post, "https://api.reka.ai/v1/chat");
+            request.Headers.Add("X-Api-Key", apiKey);
+            request.Content = JsonContent.Create(payload);
+            
+            var response = await Http.SendAsync(request);
+            response.EnsureSuccessStatusCode();
+            
+            var result = await response.Content.ReadFromJsonAsync<RekaResponse>();
+            
+            if (result?.Choices != null && result.Choices.Length > 0)
+            {
+                var content = result.Choices[0].Message?.Content;
+                if (!string.IsNullOrEmpty(content))
+                {
+                    return content;
+                }
+            }
+            
+            throw new InvalidOperationException("Invalid response format from Reka API.");
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new InvalidOperationException($"API request failed: {ex.Message}", ex);
+        }
+    }
+    
+    // Response DTOs matching OpenAI style
+    private class RekaResponse
+    {
+        public RekaChoice[]? Choices { get; set; }
+    }
+    
+    private class RekaChoice
+    {
+        public RekaMessage? Message { get; set; }
+    }
+    
+    private class RekaMessage
+    {
+        public string? Role { get; set; }
+        public string? Content { get; set; }
+    }
+}
